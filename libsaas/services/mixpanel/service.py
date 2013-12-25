@@ -87,6 +87,24 @@ class Mixpanel(base.Resource):
 
         return port.to_u(value)
 
+    def _make_track_import_params(self, event, properties, ip, test):
+        if not self.token:
+            raise InsufficientSettings('token is required for this method')
+
+        if properties is None:
+            properties = {}
+        properties['token'] = self.token
+
+        properties = dict((port.to_u(key), self.serialize_property(value)) for
+                          key, value in properties.items())
+
+        params = base.get_params(('ip', 'test'), locals(),
+                                 resources.serialize_param)
+
+        data = {'event': port.to_u(event), 'properties': properties}
+        params['data'] = base64.b64encode(port.to_b(json.dumps(data)))
+        return params
+
     @base.apimethod
     def track(self, event, properties=None, ip=False, test=False):
         """
@@ -109,31 +127,56 @@ class Mixpanel(base.Resource):
 
         :return: A boolean that tells if the event has been logged.
         """
-        if not self.token:
-            raise InsufficientSettings('token is required for this method')
+        params = self._make_track_import_params(event, properties, ip, test)
 
-        if properties is None:
-            properties = {}
-        properties['token'] = self.token
-
-        properties = dict((port.to_u(key), self.serialize_property(value)) for
-                          key, value in properties.items())
-
-        params = base.get_params(('ip', 'test'), locals(),
-                                 resources.serialize_param)
-
-        data = {'event': port.to_u(event), 'properties': properties}
-        params['data'] = base64.b64encode(port.to_b(json.dumps(data)))
-
-        request = http.Request('GET', 'http://api.mixpanel.com/track/', params)
+        request = http.Request('GET', 'https://api.mixpanel.com/track/', params)
         request.nosign = True
 
         return request, resources.parse_boolean
 
-    track.__doc__ = track.__doc__.format(
-        'https://mixpanel.com/docs/api-documentation/'
-        'http-specification-insert-data')
-    
+    @base.apimethod
+    def import_event(self, event, properties, ip=False, test=False):
+        """
+        Import an event. Used to upload old events (> 5 days old)
+
+        Upstream documentation: {0}
+
+        :var event: The name of the event.
+        :vartype event: str
+
+        :var properties: The event's properties, your access token will be
+            inserted into it automatically.
+        :vartype properties: dict
+
+        :var ip: Should Mixpanel automatically use the incoming request IP.
+        :vartype ip: bool
+
+        :var test: Use a high priority rate limited queue for testing.
+        :vartype test: bool
+
+        :return: A boolean that tells if the event has been successfully imported.
+        """
+        # properties time and IP are required for import
+        assert properties and ('time' in properties)
+        assert properties and ('ip' in properties)
+
+        params = self._make_track_import_params(event, properties, ip, test)
+
+        # see https://mixpanel.com/docs/api-documentation/importing-events-older-than-31-days
+        if not self.api_key:
+            raise InsufficientSettings('API key is required.')
+
+        params['api_key'] = self.api_key
+        request = http.Request('GET', 'https://api.mixpanel.com/import/',
+            params)
+        request.nosign = True
+
+        return request, resources.parse_boolean
+
+#    import_event.__doc__ = import_event.__doc__.format(
+#        'https://mixpanel.com/docs/api-documentation/'
+#        'http-specification-insert-data')
+
     @base.apimethod
     def engage(self, distinct_id, data):
         """
@@ -152,7 +195,7 @@ class Mixpanel(base.Resource):
 
         data['$token'] = self.token
         data['$distinct_id'] = distinct_id
-        
+
         params = {'data': base64.b64encode(port.to_b(json.dumps(data)))}
 
         request = http.Request('GET', 'http://api.mixpanel.com/engage/', params)
@@ -163,7 +206,7 @@ class Mixpanel(base.Resource):
     engage.__doc__ = engage.__doc__.format(
         'https://mixpanel.com/docs/people-analytics/'
         'people-http-specification-insert-data')
-    
+
     @base.apimethod
     def export(self, from_date, to_date, event=None, where=None, bucket=None):
         """
